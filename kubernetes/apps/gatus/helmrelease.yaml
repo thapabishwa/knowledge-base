@@ -1,0 +1,166 @@
+# Health checks for the household services, run from inside the cluster.
+#
+# Results are kept in memory: there is no storage class yet, so history resets
+# when the pod restarts. That is acceptable for a status page; persistence
+# comes with local-path-provisioner.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gatus
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: gatus
+      version: 1.5.0
+      sourceRef:
+        kind: HelmRepository
+        name: twin
+  values:
+    image:
+      # The chart's appVersion trails the app; pin the app explicitly.
+      tag: v5.37.0
+
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+
+    # Trust the household CA for the HTTPS checks. cert-manager writes the
+    # issuing CA into every certificate Secret as ca.crt, so Gatus mounts it
+    # from its own -- nothing to copy, and it follows the CA if that changes.
+    # Go reads SSL_CERT_DIR in addition to the image's normal CA bundle.
+    env:
+      SSL_CERT_DIR: /etc/ssl/certs:/etc/household-ca
+    extraVolumeMounts:
+      - name: household-ca
+        mountPath: /etc/household-ca/ca.crt
+        subPath: ca.crt
+        readOnly: true
+        existingSecret: gatus-internal-tls
+
+    # Traefik is the default IngressClass, so no class name is needed.
+    ingress:
+      enabled: true
+      annotations:
+        cert-manager.io/cluster-issuer: internal-ca
+        traefik.ingress.kubernetes.io/router.middlewares: gatus-redirect-https@kubernetescrd
+      hosts:
+        - gatus.internal
+      tls:
+        - hosts: [gatus.internal]
+          secretName: gatus-internal-tls
+
+    config:
+      ui:
+        title: Home | Gatus
+        header: Home
+
+      endpoints:
+        # --- Household services (LXC on pve)
+        - name: Jellyfin
+          group: household
+          url: http://10.0.0.10:8096/health
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+            - "[BODY] == Healthy"
+
+        - name: qBittorrent
+          group: household
+          url: http://10.0.0.11:8090
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: Unmanic
+          group: household
+          url: http://10.0.0.12:8888/unmanic/ui/dashboard/ # / is a 301 to here
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: Prometheus
+          group: household
+          url: http://10.0.0.6:9090/-/healthy
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        # --- By name: proves DNS, Traefik and the certificate as well as the
+        # app. jellyfin.internal stays on HTTP -- that is the path the TV uses.
+        - name: home.internal
+          group: via traefik
+          url: https://home.internal
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: jellyfin.internal
+          group: via traefik
+          url: http://jellyfin.internal/health
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: qbit.internal
+          group: via traefik
+          url: https://qbit.internal
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: proxmox.internal
+          group: via traefik
+          url: https://proxmox.internal
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: unmanic.internal
+          group: via traefik
+          url: https://unmanic.internal/unmanic/ui/dashboard/
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"
+
+        # --- Network
+        - name: Proxmox
+          group: network
+          url: https://10.0.0.3:8006
+          interval: 1m
+          client:
+            insecure: true # pve's self-signed certificate
+          conditions:
+            - "[STATUS] == 200"
+
+        - name: Router DNS
+          group: network
+          url: 10.0.0.1
+          interval: 1m
+          # A name that does not move when a service changes proxy, so this
+          # tests the resolver and nothing else.
+          dns:
+            query-name: pve.internal
+            query-type: A
+          conditions:
+            - "[DNS_RCODE] == NOERROR"
+            - "[BODY] == 10.0.0.3"
+
+        - name: Switch
+          group: network
+          url: http://10.0.0.2
+          interval: 5m
+          conditions:
+            - "[STATUS] == 200"
+
+        # --- The cluster's own apps. home.internal above is the same Homepage
+        # seen through Traefik; this one isolates the pod from the proxy.
+        - name: Homepage
+          group: cluster
+          url: http://homepage.homepage.svc.cluster.local:3000
+          interval: 1m
+          conditions:
+            - "[STATUS] == 200"

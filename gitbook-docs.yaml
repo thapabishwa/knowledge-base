@@ -1,0 +1,11 @@
+$schema: https://api.gitbook.com/gitbook-docs.yaml
+site:
+  title: Knowledge Base
+  structure:
+    - type: space
+      key: network
+      title: Knowledge Base
+      path: home
+      default: true
+      content:
+        directory: ./

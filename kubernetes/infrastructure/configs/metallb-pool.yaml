@@ -1,0 +1,24 @@
+# Addresses MetalLB may hand to LoadBalancer Services.
+#
+# 10.0.0.30-39: below the DHCP pool (.160-.191), clear of every reservation
+# and static address, and nothing answered on any of them when this was
+# written. Ten is plenty -- an ingress needs one, and most apps go behind it.
+#
+#   10.0.0.30  Traefik (fixed, see ../controllers/traefik/helmrelease.yaml)
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: lan
+  namespace: metallb-system
+spec:
+  addresses:
+    - 10.0.0.30-10.0.0.39
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: lan
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - lan
